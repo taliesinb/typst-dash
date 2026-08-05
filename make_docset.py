@@ -129,6 +129,54 @@ def relativize(root: Path) -> None:
             file.write_text(text, encoding="utf-8", errors="surrogateescape")
 
 
+def embed_search_index(documents: Path, search_json: Path) -> None:
+    """Make the site's own search box work offline.
+
+    The stock docs.js fetch()es /assets/search.json, which fails under file://
+    (absolute path, and WebKit does not support fetch for file URLs), and it
+    links results via absolute routes. Embed the index as a classic script,
+    short-circuit the fetch, and relativize result links.
+    """
+    assets = search_json.parent
+    index_js = assets / "search-index.js"
+    index_js.write_text(
+        "window.__searchIndex = " + search_json.read_text().strip() + ";\n"
+    )
+
+    docs_js = assets / "docs.js"
+    js = docs_js.read_text()
+    js = js.replace(
+        "async function fetchSearchIndex() {",
+        "async function fetchSearchIndex() {\n"
+        "  if (window.__searchIndex) return window.__searchIndex;",
+        1,
+    )
+    js = js.replace(
+        "      a.href = url;",
+        '      a.href = (window.__docRoot || "") + '
+        'url.replace(/^\\//, "").replace(/\\/(\\?|#|$)/, "/index.html$1");',
+        1,
+    )
+    docs_js.write_text(js)
+
+    # Load the embedded index (and docs.js itself) as classic deferred
+    # scripts; module scripts can be blocked for local files.
+    tag_re = re.compile(r'<script type="module" src="([^"]*)assets/docs\.js">')
+    for page in documents.rglob("*.html"):
+        text = page.read_text(encoding="utf-8", errors="surrogateescape")
+        new = tag_re.sub(
+            lambda m: (
+                f'<script>window.__docRoot="{m.group(1)}";</script>'
+                f'<script defer src="{m.group(1)}assets/search-index.js"></script>'
+                f'<script defer src="{m.group(1)}assets/docs.js">'
+            ),
+            text,
+            count=1,
+        )
+        if new != text:
+            page.write_text(new, encoding="utf-8", errors="surrogateescape")
+
+
 def find_search_json(site: Path) -> Path:
     candidates = sorted(site.rglob("search.json"))
     if not candidates:
@@ -202,10 +250,15 @@ def main() -> None:
 
     relativize(documents)
 
-    search = json.loads(find_search_json(documents).read_text())
-    counts = build_index(
-        docset / "Contents" / "Resources" / "docSet.dsidx", search["items"]
-    )
+    search_json = find_search_json(documents)
+    embed_search_index(documents, search_json)
+
+    search = json.loads(search_json.read_text())
+    entries = [
+        (*derive_entry(item), route_to_path(item["route"]))
+        for item in search["items"]
+    ]
+    counts = build_index(docset / "Contents" / "Resources" / "docSet.dsidx", entries)
     write_plist(docset / "Contents" / "Info.plist")
     (args.out / "VERSION").write_text(args.version + "\n")
 
