@@ -136,7 +136,8 @@ def find_search_json(site: Path) -> Path:
     return candidates[0]
 
 
-def build_index(db_path: Path, items: list[dict]) -> dict:
+def build_index(db_path: Path, entries: list[tuple[str, str, str]]) -> dict:
+    """Write (name, type, path) entries into a Dash searchIndex database."""
     con = sqlite3.connect(db_path)
     cur = con.cursor()
     cur.execute(
@@ -147,11 +148,10 @@ def build_index(db_path: Path, items: list[dict]) -> dict:
         "CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path)"
     )
     counts: dict[str, int] = {}
-    for item in items:
-        name, typ = derive_entry(item)
+    for name, typ, path in entries:
         cur.execute(
             "INSERT OR IGNORE INTO searchIndex(name, type, path) VALUES (?,?,?)",
-            (name, typ, route_to_path(item["route"])),
+            (name, typ, path),
         )
         counts[typ] = counts.get(typ, 0) + 1
     con.commit()
@@ -159,18 +159,25 @@ def build_index(db_path: Path, items: list[dict]) -> dict:
     return counts
 
 
-def write_plist(path: Path) -> None:
+def write_plist(
+    path: Path,
+    name: str = "Typst",
+    identifier: str = "typst",
+    index_file: str = "index.html",
+    fallback_url: str | None = "https://typst.app/docs/",
+) -> None:
     # No version key: the Dash-User-Contributions checklist requires version
     # info to live in docset.json only.
     plist = {
-        "CFBundleIdentifier": "typst",
-        "CFBundleName": "Typst",
-        "DocSetPlatformFamily": "typst",
+        "CFBundleIdentifier": identifier,
+        "CFBundleName": name,
+        "DocSetPlatformFamily": identifier,
         "isDashDocset": True,
         "isJavaScriptEnabled": True,
-        "dashIndexFilePath": "index.html",
-        "DashDocSetFallbackURL": "https://typst.app/docs/",
+        "dashIndexFilePath": index_file,
     }
+    if fallback_url:
+        plist["DashDocSetFallbackURL"] = fallback_url
     with open(path, "wb") as f:
         plistlib.dump(plist, f)
 

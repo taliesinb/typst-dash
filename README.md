@@ -40,6 +40,47 @@ This:
 Then install by double-clicking `dist/Typst.docset` or via Dash → Settings →
 Docsets → `+` → Add Local Docset.
 
+## Package docsets (cetz, fletcher, any package)
+
+`package_docset.sh` builds a Dash docset for **any** Typst package, using
+[tinymist](https://github.com/Myriad-Dreamin/tinymist)'s package docs
+generator (`tinymist package docs`), which extracts doc comments from a
+package and compiles a multi-page HTML API reference plus a structured JSON of
+every definition.
+
+```sh
+./package_docset.sh ~/github/typst-cetz ~/github/typst-fletcher
+./package_docset.sh @preview/oxifmt:0.2.1     # registry specs work too
+```
+
+Each produces `dist/<name>.docset`. Requirements: a checkout of tinymist
+(default `~/github/tinymist`, override with `TINYMIST_REPO=...`) with:
+
+```sh
+cd $TINYMIST_REPO
+cargo build -p tinymist-cli --release
+# the docs bundle needs the index wasm plugin:
+rustup target add wasm32-unknown-unknown
+cargo build -p tinymist-index --release --target wasm32-unknown-unknown
+cp target/wasm32-unknown-unknown/release/tinymist_index.wasm typ/packages/tinymist-index/
+```
+
+The search index comes from tinymist's PackageDoc JSON (each definition has a
+name, kind, and `bundle_link`); per-source-module duplicates are deduped in
+favor of the package-exports pages.
+
+Known issues:
+
+- `typst-html` (as of typst master / tinymist's fork) has a char-boundary
+  panic in `find_closing_tag` when raw text contains a multi-byte character
+  right after `</` within tag-length distance (cetz's docs trigger it via
+  '−'). Fix: add `rest.is_char_boundary(len)` to the guard in
+  `crates/typst-html/src/encode.rs`. Worth upstreaming; until then, patch the
+  vendored checkout under `~/.cargo/git/checkouts/typst-*/`.
+- Packages using custom doc-comment markup (e.g. fletcher's `#param[...]`)
+  show a "failed to parse docs" note where tinymist can't evaluate it;
+  content remains readable.
+
 ## Notes
 
 - Index entries use code-style names derived from routes and anchors
