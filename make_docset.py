@@ -109,6 +109,8 @@ def relativize(root: Path) -> None:
         text = file.read_text(encoding="utf-8", errors="surrogateescape")
         orig = text
         if file.suffix == ".html":
+            # Dash prefers page titles without the docset name.
+            text = text.replace(" - Typst Documentation</title>", "</title>", 1)
             text = ABS_URL_HTML.sub(lambda m: f'{m.group(1)}="{rel(m.group(2))}"', text)
             text = ABS_URL_SRCSET.sub(
                 lambda m: 'srcset="'
@@ -157,7 +159,9 @@ def build_index(db_path: Path, items: list[dict]) -> dict:
     return counts
 
 
-def write_plist(path: Path, version: str) -> None:
+def write_plist(path: Path) -> None:
+    # No version key: the Dash-User-Contributions checklist requires version
+    # info to live in docset.json only.
     plist = {
         "CFBundleIdentifier": "typst",
         "CFBundleName": "Typst",
@@ -166,7 +170,6 @@ def write_plist(path: Path, version: str) -> None:
         "isJavaScriptEnabled": True,
         "dashIndexFilePath": "index.html",
         "DashDocSetFallbackURL": "https://typst.app/docs/",
-        "version": version,
     }
     with open(path, "wb") as f:
         plistlib.dump(plist, f)
@@ -196,7 +199,8 @@ def main() -> None:
     counts = build_index(
         docset / "Contents" / "Resources" / "docSet.dsidx", search["items"]
     )
-    write_plist(docset / "Contents" / "Info.plist", args.version)
+    write_plist(docset / "Contents" / "Info.plist")
+    (args.out / "VERSION").write_text(args.version + "\n")
 
     # Docset icons (checked into this repo; derived from the Typst logo).
     here = Path(__file__).resolve().parent
