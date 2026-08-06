@@ -270,10 +270,10 @@ main.all-symbols { max-width: 46rem; margin: 0 auto; padding: 1rem 1.5rem 4rem; 
 .sym-card { display: flex; gap: 0.9rem; padding: 0.55rem 0; border-top: 1px solid rgba(128,128,128,0.2); }
 .sym-card:target { background: rgba(35,157,173,0.12); outline: 2px solid rgba(35,157,173,0.6); outline-offset: 3px; border-radius: 4px; }
 .sym-glyph { flex: none; width: 3rem; height: 3rem; display: flex; align-items: center; justify-content: center; font-size: 1.9rem; }
-.sym-body { min-width: 0; font-size: 0.9rem; line-height: 1.45; }
-.sym-body h3 { margin: 0 0 0.15rem; font-size: 1rem; }
+.sym-body { min-width: 0; line-height: 1.45; }
+.sym-body h3 { margin: 0 0 0.15rem; font-size: 1.1em; }
 .sym-body h3 a { color: inherit; text-decoration: none; }
-.sym-deprecation { margin: 0 0 0.15rem; font-size: 0.9rem; color: #b45309; }
+.sym-deprecation { margin: 0 0 0.15rem; color: #b45309; }
 .sym-row { display: flex; gap: 0.5rem; }
 .sym-key { flex: none; width: 5.5rem; font-weight: 500; opacity: 0.6; }
 .sym-alts { display: inline-flex; flex-wrap: wrap; gap: 0.4em 0.55em; font-size: 1.15rem; line-height: 1.4; }
