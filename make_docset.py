@@ -10,6 +10,7 @@ parameter, etc. with its route.
 """
 
 import argparse
+import html as html_mod
 import json
 import plistlib
 import re
@@ -177,6 +178,173 @@ def embed_search_index(documents: Path, search_json: Path) -> None:
             page.write_text(new, encoding="utf-8", errors="surrogateescape")
 
 
+SYMBOL_LI = re.compile(r'<li (id="symbol-[^"]*"[^>]*)>')
+LI_ATTR = re.compile(r'([a-zA-Z-]+)="([^"]*)"')
+
+# (module, source page dir, section heading) for the symbol grid pages.
+SYMBOL_PAGES = [
+    ("sym", "reference/symbols/sym", "General Symbols"),
+    ("emoji", "reference/symbols/emoji", "Emoji"),
+]
+
+ALL_SYMBOLS_DIR = "reference/symbols/all"
+
+
+def parse_symbol_grid(page_html: str) -> list[dict]:
+    """Extract the symbol metadata that the grid page stores as data
+    attributes on its <li> elements (the same data its click flyout shows)."""
+    symbols = []
+    for li in SYMBOL_LI.findall(page_html):
+        attrs = {k: html_mod.unescape(v) for k, v in LI_ATTR.findall(li)}
+        if attrs.get("data-codex-name"):
+            symbols.append(attrs)
+    return symbols
+
+
+def esc(text: str) -> str:
+    return html_mod.escape(text, quote=True)
+
+
+def codeify(text: str) -> str:
+    """HTML-escape, rendering `backticked` spans as <code>."""
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", esc(text))
+
+
+def unicode_escape(value: str) -> str:
+    return " ".join(f"\\u{{{ord(ch):04X}}}" for ch in value)
+
+
+def render_symbol_section(module: str, attrs: dict, glyphs: dict) -> str:
+    name = attrs["data-codex-name"]
+    qualified = f"{module}.{name}"
+    value = attrs.get("data-value", "")
+    title = attrs.get("data-unic-name") or qualified
+
+    rows = [f"<dt>Name</dt><dd><code>{esc(qualified)}</code></dd>"]
+    if value:
+        rows.append(f"<dt>Escape</dt><dd><code>{esc(unicode_escape(value))}</code></dd>")
+    if attrs.get("data-math-class"):
+        rows.append(f"<dt>Math Class</dt><dd>{esc(attrs['data-math-class'])}</dd>")
+    if attrs.get("data-accent") == "true":
+        rows.append("<dt>Accent</dt><dd>yes</dd>")
+    if attrs.get("data-markup-shorthand"):
+        rows.append(
+            f"<dt>Markup</dt><dd><code>{esc(attrs['data-markup-shorthand'])}</code></dd>"
+        )
+    if attrs.get("data-math-shorthand"):
+        rows.append(
+            f"<dt>Math</dt><dd><code>{esc(attrs['data-math-shorthand'])}</code></dd>"
+        )
+    if attrs.get("data-latex-name"):
+        rows.append(f"<dt>LaTeX</dt><dd><code>{esc(attrs['data-latex-name'])}</code></dd>")
+
+    deprecation = ""
+    if attrs.get("data-deprecation"):
+        deprecation = (
+            f'<p class="sym-deprecation">&#9888; {codeify(attrs["data-deprecation"])}</p>'
+        )
+
+    variants = ""
+    alternates = attrs.get("data-alternates", "").split()
+    if alternates:
+        chips = "".join(
+            f'<a class="sym-variant" href="#{esc(module)}.{esc(alt)}">'
+            f'<span class="sym">{esc(glyphs.get(alt, ""))}</span>'
+            f"<code>{esc(alt)}</code></a>"
+            for alt in alternates
+        )
+        variants = f'<div class="sym-variants">{chips}</div>'
+
+    return (
+        f'<section class="sym-card" id="{esc(qualified)}">'
+        f'<div class="sym-glyph"><span>{esc(value)}</span></div>'
+        f'<div class="sym-body"><h3><a href="#{esc(qualified)}">{esc(title)}</a></h3>'
+        f"{deprecation}<dl>{''.join(rows)}</dl>{variants}</div>"
+        "</section>"
+    )
+
+
+ALL_SYMBOLS_STYLE = """
+main.all-symbols { max-width: 60rem; margin: 0 auto; padding: 1rem 1.5rem 4rem; }
+main.all-symbols h2 { margin: 2.5rem 0 1rem; }
+.sym-card { display: flex; gap: 1rem; padding: 0.9rem 0; border-top: 1px solid rgba(128,128,128,0.25); }
+.sym-card:target { background: rgba(35,157,173,0.12); outline: 2px solid rgba(35,157,173,0.6); outline-offset: 4px; border-radius: 4px; }
+.sym-glyph { flex: none; width: 3.6rem; height: 3.6rem; display: flex; align-items: center; justify-content: center; font-size: 2rem; border: 1px solid rgba(128,128,128,0.35); border-radius: 8px; }
+.sym-body { min-width: 0; }
+.sym-body h3 { margin: 0 0 0.35rem; font-size: 1.05rem; }
+.sym-body h3 a { color: inherit; text-decoration: none; }
+.sym-deprecation { margin: 0.2rem 0 0.4rem; color: #b45309; }
+.sym-body dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 0.8rem; margin: 0; }
+.sym-body dt { font-weight: 600; opacity: 0.75; }
+.sym-body dd { margin: 0; overflow-wrap: anywhere; }
+.sym-variants { margin-top: 0.55rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.sym-variant { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.45rem; border: 1px solid rgba(128,128,128,0.35); border-radius: 6px; text-decoration: none; color: inherit; font-size: 0.85rem; }
+.sym-variant .sym { font-size: 1.05rem; }
+"""
+
+
+def build_all_symbols_page(documents: Path) -> list[tuple[str, str, str]]:
+    """Generate reference/symbols/all/index.html, a flat listing of every
+    symbol with the metadata the grid pages show in their click flyout, and
+    return Dash index entries pointing at its sections.
+
+    Runs after relativize(), so all emitted asset/page URLs are relative.
+    """
+    entries = [("All Symbols", "Section", f"{ALL_SYMBOLS_DIR}/index.html")]
+    body = []
+    for module, page_dir, heading in SYMBOL_PAGES:
+        page = documents / page_dir / "index.html"
+        symbols = parse_symbol_grid(
+            page.read_text(encoding="utf-8", errors="surrogateescape")
+        )
+        glyphs = {s["data-codex-name"]: s.get("data-value", "") for s in symbols}
+        body.append(f'<h2 id="{esc(module)}">{esc(heading)} (<code>{esc(module)}</code>)</h2>')
+        for attrs in symbols:
+            body.append(render_symbol_section(module, attrs, glyphs))
+            qualified = f"{module}.{attrs['data-codex-name']}"
+            entries.append(
+                (qualified, "Constant", f"{ALL_SYMBOLS_DIR}/index.html#{qualified}")
+            )
+
+    page_html = (
+        "<!DOCTYPE html><html><head>"
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<link href="../../../assets/base.css" rel="stylesheet">'
+        '<link href="../../../assets/docs.css" rel="stylesheet">'
+        f"<style>{ALL_SYMBOLS_STYLE}</style>"
+        "<title>All Symbols</title></head><body>"
+        '<main class="all-symbols"><h1>All Symbols</h1>'
+        "<p>Every symbol in the <code>sym</code> and <code>emoji</code> modules "
+        "with its escape sequence, math class, and variants.</p>"
+        f"{''.join(body)}</main></body></html>"
+    )
+    out = documents / ALL_SYMBOLS_DIR / "index.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(page_html, encoding="utf-8")
+    return entries
+
+
+EMOJI_NAV_LINK = re.compile(
+    r'(<li aria-expanded="false"><a href="([^"]*)reference/symbols/emoji/index\.html">'
+    r"Emoji</a></li>)"
+)
+
+
+def add_all_symbols_nav(documents: Path) -> None:
+    """Add an "All Symbols" entry to the sidebar nav next to General
+    Symbols/Emoji on every page. Runs after relativize()."""
+    for page in documents.rglob("*.html"):
+        text = page.read_text(encoding="utf-8", errors="surrogateescape")
+        new = EMOJI_NAV_LINK.sub(
+            r'\1<li aria-expanded="false">'
+            r'<a href="\g<2>reference/symbols/all/index.html">All Symbols</a></li>',
+            text,
+        )
+        if new != text:
+            page.write_text(new, encoding="utf-8", errors="surrogateescape")
+
+
 def find_search_json(site: Path) -> Path:
     candidates = sorted(site.rglob("search.json"))
     if not candidates:
@@ -258,6 +426,8 @@ def main() -> None:
         (*derive_entry(item), route_to_path(item["route"]))
         for item in search["items"]
     ]
+    entries += build_all_symbols_page(documents)
+    add_all_symbols_nav(documents)
     counts = build_index(docset / "Contents" / "Resources" / "docSet.dsidx", entries)
     write_plist(docset / "Contents" / "Info.plist")
     (args.out / "VERSION").write_text(args.version + "\n")
