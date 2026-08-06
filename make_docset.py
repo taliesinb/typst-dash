@@ -178,14 +178,13 @@ def embed_search_index(documents: Path, search_json: Path) -> None:
             page.write_text(new, encoding="utf-8", errors="surrogateescape")
 
 
-SYMBOL_LI = re.compile(r'<li (id="symbol-[^"]*"[^>]*)>')
+# Attribute values may contain unescaped ">" (e.g. data-value=">"), so the
+# tag cannot be bounded by [^>]*; the grid <li> always opens with <button>.
+SYMBOL_LI = re.compile(r'<li (id="symbol-.*?)><button', re.S)
 LI_ATTR = re.compile(r'([a-zA-Z-]+)="([^"]*)"')
 
-# (module, source page dir, section heading) for the symbol grid pages.
-SYMBOL_PAGES = [
-    ("sym", "reference/symbols/sym", "General Symbols"),
-    ("emoji", "reference/symbols/emoji", "Emoji"),
-]
+# Only the `sym` module is indexed; emoji are deliberately excluded.
+SYMBOL_PAGE_DIR = "reference/symbols/sym"
 
 ALL_SYMBOLS_DIR = "reference/symbols/all"
 
@@ -214,29 +213,42 @@ def unicode_escape(value: str) -> str:
     return " ".join(f"\\u{{{ord(ch):04X}}}" for ch in value)
 
 
-def render_symbol_section(module: str, attrs: dict, glyphs: dict) -> str:
+def render_symbol_section(attrs: dict, glyphs: dict, show_variants: bool, link_for) -> str:
     name = attrs["data-codex-name"]
-    qualified = f"{module}.{name}"
+    qualified = f"sym.{name}"
     value = attrs.get("data-value", "")
     title = attrs.get("data-unic-name") or qualified
 
-    rows = [f"<dt>Name</dt><dd><code>{esc(qualified)}</code></dd>"]
+    rows = [("Name", f"<code>{esc(qualified)}</code>")]
     if value:
-        rows.append(f"<dt>Escape</dt><dd><code>{esc(unicode_escape(value))}</code></dd>")
+        rows.append(("Escape", f"<code>{esc(unicode_escape(value))}</code>"))
     if attrs.get("data-math-class"):
-        rows.append(f"<dt>Math Class</dt><dd>{esc(attrs['data-math-class'])}</dd>")
+        rows.append(("Math Class", esc(attrs["data-math-class"])))
     if attrs.get("data-accent") == "true":
-        rows.append("<dt>Accent</dt><dd>yes</dd>")
+        rows.append(("Accent", "yes"))
     if attrs.get("data-markup-shorthand"):
-        rows.append(
-            f"<dt>Markup</dt><dd><code>{esc(attrs['data-markup-shorthand'])}</code></dd>"
-        )
+        rows.append(("Markup", f"<code>{esc(attrs['data-markup-shorthand'])}</code>"))
     if attrs.get("data-math-shorthand"):
-        rows.append(
-            f"<dt>Math</dt><dd><code>{esc(attrs['data-math-shorthand'])}</code></dd>"
-        )
+        rows.append(("Math", f"<code>{esc(attrs['data-math-shorthand'])}</code>"))
     if attrs.get("data-latex-name"):
-        rows.append(f"<dt>LaTeX</dt><dd><code>{esc(attrs['data-latex-name'])}</code></dd>")
+        rows.append(("LaTeX", f"<code>{esc(attrs['data-latex-name'])}</code>"))
+
+    # Only the family head lists its variants: a compact flat row of glyphs,
+    # each linking to its own section (hover for the variant's name).
+    if show_variants:
+        row = "".join(
+            f'<a class="sym-alt" title="{esc(alt)}" href="{esc(link_for(alt))}">'
+            f"{esc(glyphs[alt])}</a>"
+            for alt in attrs.get("data-alternates", "").split()
+            if glyphs.get(alt)
+        )
+        if row:
+            rows.append(("Variants", f'<span class="sym-alts">{row}</span>'))
+
+    details = "".join(
+        f'<div class="sym-row"><span class="sym-key">{key}</span>{val}</div>'
+        for key, val in rows
+    )
 
     deprecation = ""
     if attrs.get("data-deprecation"):
@@ -244,84 +256,122 @@ def render_symbol_section(module: str, attrs: dict, glyphs: dict) -> str:
             f'<p class="sym-deprecation">&#9888; {codeify(attrs["data-deprecation"])}</p>'
         )
 
-    variants = ""
-    alternates = attrs.get("data-alternates", "").split()
-    if alternates:
-        chips = "".join(
-            f'<a class="sym-variant" href="#{esc(module)}.{esc(alt)}">'
-            f'<span class="sym">{esc(glyphs.get(alt, ""))}</span>'
-            f"<code>{esc(alt)}</code></a>"
-            for alt in alternates
-        )
-        variants = f'<div class="sym-variants">{chips}</div>'
-
     return (
         f'<section class="sym-card" id="{esc(qualified)}">'
-        f'<div class="sym-glyph"><span>{esc(value)}</span></div>'
+        f'<div class="sym-glyph">{esc(value)}</div>'
         f'<div class="sym-body"><h3><a href="#{esc(qualified)}">{esc(title)}</a></h3>'
-        f"{deprecation}<dl>{''.join(rows)}</dl>{variants}</div>"
+        f"{deprecation}{details}</div>"
         "</section>"
     )
 
 
 ALL_SYMBOLS_STYLE = """
-main.all-symbols { max-width: 60rem; margin: 0 auto; padding: 1rem 1.5rem 4rem; }
-main.all-symbols h2 { margin: 2.5rem 0 1rem; }
-.sym-card { display: flex; gap: 1rem; padding: 0.9rem 0; border-top: 1px solid rgba(128,128,128,0.25); }
-.sym-card:target { background: rgba(35,157,173,0.12); outline: 2px solid rgba(35,157,173,0.6); outline-offset: 4px; border-radius: 4px; }
-.sym-glyph { flex: none; width: 3.6rem; height: 3.6rem; display: flex; align-items: center; justify-content: center; font-size: 2rem; border: 1px solid rgba(128,128,128,0.35); border-radius: 8px; }
-.sym-body { min-width: 0; }
-.sym-body h3 { margin: 0 0 0.35rem; font-size: 1.05rem; }
+main.all-symbols { max-width: 46rem; margin: 0 auto; padding: 1rem 1.5rem 4rem; }
+.sym-card { display: flex; gap: 0.9rem; padding: 0.55rem 0; border-top: 1px solid rgba(128,128,128,0.2); }
+.sym-card:target { background: rgba(35,157,173,0.12); outline: 2px solid rgba(35,157,173,0.6); outline-offset: 3px; border-radius: 4px; }
+.sym-glyph { flex: none; width: 3rem; height: 3rem; display: flex; align-items: center; justify-content: center; font-size: 1.9rem; }
+.sym-body { min-width: 0; font-size: 0.9rem; line-height: 1.45; }
+.sym-body h3 { margin: 0 0 0.15rem; font-size: 1rem; }
 .sym-body h3 a { color: inherit; text-decoration: none; }
-.sym-deprecation { margin: 0.2rem 0 0.4rem; color: #b45309; }
-.sym-body dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 0.8rem; margin: 0; }
-.sym-body dt { font-weight: 600; opacity: 0.75; }
-.sym-body dd { margin: 0; overflow-wrap: anywhere; }
-.sym-variants { margin-top: 0.55rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
-.sym-variant { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.45rem; border: 1px solid rgba(128,128,128,0.35); border-radius: 6px; text-decoration: none; color: inherit; font-size: 0.85rem; }
-.sym-variant .sym { font-size: 1.05rem; }
+.sym-deprecation { margin: 0 0 0.15rem; font-size: 0.9rem; color: #b45309; }
+.sym-row { display: flex; gap: 0.5rem; }
+.sym-key { flex: none; width: 5.5rem; font-weight: 500; opacity: 0.6; }
+.sym-alts { display: inline-flex; flex-wrap: wrap; gap: 0.4em 0.55em; font-size: 1.15rem; line-height: 1.4; }
+.sym-alt { text-decoration: none; color: inherit; }
+.sym-alt:hover { color: #239dad; }
+.class-list { list-style: none; padding: 0; }
+.class-list li { margin: 0.25rem 0; }
+.class-list .count { opacity: 0.55; margin-left: 0.5rem; font-size: 0.9rem; }
 """
 
 
-def build_all_symbols_page(documents: Path) -> list[tuple[str, str, str]]:
-    """Generate reference/symbols/all/index.html, a flat listing of every
-    symbol with the metadata the grid pages show in their click flyout, and
-    return Dash index entries pointing at its sections.
-
-    Runs after relativize(), so all emitted asset/page URLs are relative.
-    """
-    entries = [("All Symbols", "Section", f"{ALL_SYMBOLS_DIR}/index.html")]
-    body = []
-    for module, page_dir, heading in SYMBOL_PAGES:
-        page = documents / page_dir / "index.html"
-        symbols = parse_symbol_grid(
-            page.read_text(encoding="utf-8", errors="surrogateescape")
-        )
-        glyphs = {s["data-codex-name"]: s.get("data-value", "") for s in symbols}
-        body.append(f'<h2 id="{esc(module)}">{esc(heading)} (<code>{esc(module)}</code>)</h2>')
-        for attrs in symbols:
-            body.append(render_symbol_section(module, attrs, glyphs))
-            qualified = f"{module}.{attrs['data-codex-name']}"
-            entries.append(
-                (qualified, "Constant", f"{ALL_SYMBOLS_DIR}/index.html#{qualified}")
-            )
-
-    page_html = (
+def write_page(path: Path, title: str, body: str, asset_prefix: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
         "<!DOCTYPE html><html><head>"
         '<meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        '<link href="../../../assets/base.css" rel="stylesheet">'
-        '<link href="../../../assets/docs.css" rel="stylesheet">'
+        f'<link href="{asset_prefix}assets/base.css" rel="stylesheet">'
+        f'<link href="{asset_prefix}assets/docs.css" rel="stylesheet">'
         f"<style>{ALL_SYMBOLS_STYLE}</style>"
-        "<title>All Symbols</title></head><body>"
-        '<main class="all-symbols"><h1>All Symbols</h1>'
-        "<p>Every symbol in the <code>sym</code> and <code>emoji</code> modules "
-        "with its escape sequence, math class, and variants.</p>"
-        f"{''.join(body)}</main></body></html>"
+        f"<title>{esc(title)}</title></head><body>"
+        f'<main class="all-symbols">{body}</main></body></html>',
+        encoding="utf-8",
     )
-    out = documents / ALL_SYMBOLS_DIR / "index.html"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(page_html, encoding="utf-8")
+
+
+def build_all_symbols_pages(documents: Path) -> list[tuple[str, str, str]]:
+    """Generate reference/symbols/all/: an index page plus one page per math
+    class listing every `sym` symbol with the metadata the grid page shows in
+    its click flyout. Returns Dash index entries pointing at the sections.
+
+    Runs after relativize(), so all emitted asset/page URLs are relative.
+    """
+    page = documents / SYMBOL_PAGE_DIR / "index.html"
+    symbols = parse_symbol_grid(
+        page.read_text(encoding="utf-8", errors="surrogateescape")
+    )
+    glyphs = {s["data-codex-name"]: s.get("data-value", "") for s in symbols}
+
+    # The variants row goes on the head of each dotted family: the first
+    # member in page order (usually the dot-free name, but e.g. the arrow
+    # and triangle families have no dot-free member).
+    heads = set()
+    seen_families = set()
+    for attrs in symbols:
+        family = attrs["data-codex-name"].split(".", 1)[0]
+        if family not in seen_families:
+            seen_families.add(family)
+            heads.add(attrs["data-codex-name"])
+
+    by_class: dict[str, list[dict]] = {}
+    class_slug_of: dict[str, str] = {}
+    for attrs in symbols:
+        cls = attrs.get("data-math-class") or "Other"
+        by_class.setdefault(cls, []).append(attrs)
+        class_slug_of[attrs["data-codex-name"]] = cls.lower()
+
+    entries = [("All Symbols", "Section", f"{ALL_SYMBOLS_DIR}/index.html")]
+    toc = []
+    for cls in sorted(by_class):
+        slug = cls.lower()
+        page_path = f"{ALL_SYMBOLS_DIR}/{slug}/index.html"
+        members = by_class[cls]
+        toc.append(
+            f'<li><a href="{esc(slug)}/index.html">{esc(cls)}</a>'
+            f'<span class="count">{len(members)}</span></li>'
+        )
+        entries.append((f"{cls} Symbols", "Section", page_path))
+
+        def link_for(alt: str, here: str = slug) -> str:
+            target = class_slug_of[alt]
+            anchor = f"#sym.{alt}"
+            return anchor if target == here else f"../{target}/index.html{anchor}"
+
+        body = [f"<h1>{esc(cls)} Symbols</h1>"]
+        for attrs in members:
+            body.append(
+                render_symbol_section(
+                    attrs, glyphs, attrs["data-codex-name"] in heads, link_for
+                )
+            )
+            qualified = f"sym.{attrs['data-codex-name']}"
+            entries.append((qualified, "Constant", f"{page_path}#{qualified}"))
+        write_page(
+            documents / page_path,
+            f"{cls} Symbols",
+            "".join(body),
+            asset_prefix="../../../../",
+        )
+
+    write_page(
+        documents / ALL_SYMBOLS_DIR / "index.html",
+        "All Symbols",
+        "<h1>All Symbols</h1>"
+        "<p>Every symbol in the <code>sym</code> module, by math class.</p>"
+        f'<ul class="class-list">{"".join(toc)}</ul>',
+        asset_prefix="../../../",
+    )
     return entries
 
 
@@ -426,7 +476,7 @@ def main() -> None:
         (*derive_entry(item), route_to_path(item["route"]))
         for item in search["items"]
     ]
-    entries += build_all_symbols_page(documents)
+    entries += build_all_symbols_pages(documents)
     add_all_symbols_nav(documents)
     counts = build_index(docset / "Contents" / "Resources" / "docSet.dsidx", entries)
     write_plist(docset / "Contents" / "Info.plist")
